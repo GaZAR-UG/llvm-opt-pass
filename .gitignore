@@ -1,3 +1,7 @@
+# LLVM IR
+*.ll
+*.bc
+
 # Prerequisites
 *.d
 
