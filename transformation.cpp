@@ -9,6 +9,10 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <iostream>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/DerivedTypes.h>
+
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Function.h"
@@ -45,14 +49,17 @@ public:
     const static llvm::StringRef TargetFunName = "_Z3foov";
     Result TargetCallSites;
     for (auto &F : M) {
-      for (auto &I : F) {
-        if (auto *CB = llvm::dyn_cast<llvm::CallBase>(&I)) {
-          llvm::outs() << "found a call site!\n";
-          if (!CB->isIndirectCall()) {
-            // Only find direct function calls.
-            if (CB->getCalledFunction() &&
-                CB->getCalledFunction()->getName() == TargetFunName) {
-              TargetCallSites.insert(CB);
+      for (auto &BB : F) {
+        for (auto &I : BB) {
+          if (auto *CB = llvm::dyn_cast<llvm::CallBase>(&I)) {
+            if (!CB->isIndirectCall()) {
+              // Only find direct function calls.
+              if (CB->getCalledFunction() &&
+                  CB->getCalledFunction()->getName() == TargetFunName) {
+                llvm::outs()
+                    << "found a direct call to '" << TargetFunName << "'!\n";
+                TargetCallSites.insert(CB);
+              }
             }
           }
         }
@@ -77,10 +84,27 @@ public:
     // The name of the function that we wish to call instead.
     const static llvm::StringRef ReplacementFunName = "_Z3bari";
     auto *ReplacementFun = M.getFunction(ReplacementFunName);
+    llvm::outs() << "the analysis pass found " << TargetCallSites.size()
+                 << " interesting target call sites...\n";
+    llvm::outs() << "applying code transformation...\n";
     for (auto *TargetCallSite : TargetCallSites) {
-      llvm::outs() << "found target call site: ";
-      TargetCallSite->print(llvm::outs());
+      // Construct the callee for replacement.
+      // auto *IntTy = llvm::IntegerType::get(M.getContext(), 32);
+      // auto *FunTy = llvm::FunctionType::get(
+          // llvm::Type::getVoidTy(M.getContext()), {IntTy}, false);
+      // llvm::FunctionCallee NewCallee(FunTy, ReplacementFun);
+      TargetCallSite->setCalledFunction(ReplacementFun);
+            auto *ConstInt = llvm::ConstantInt::get(
+          llvm::IntegerType::get(M.getContext(), 32), 42);
+      // TargetCallSite->set
+      TargetCallSite->setArgOperand(0, ConstInt);
+      TargetCallSite->getFunctionType()->print(llvm::outs());
       llvm::outs() << '\n';
+      // Produce an integer constant to be used as an argument.
+
+      // TargetCallSite->replace;
+      llvm::outs() << "arg ops: " << TargetCallSite->getNumArgOperands() << '\n';
+      // TargetCallSite->setArgOperand(0, ConstInt);
     }
     return llvm::PreservedAnalyses::none();
   }
@@ -121,6 +145,10 @@ int main(int argc, char **argv) {
   MPM.addPass(CallSiteReplacer());
   // Just to be sure that none of the passes messed up the module.
   MPM.addPass(llvm::VerifierPass());
+  // Run our transformation pass.
   MPM.run(*M, MAM);
+  llvm::outs() << "transformed program:\n";
+  llvm::outs() << *M;
+  llvm::outs() << '\n';
   return 0;
 }
