@@ -9,14 +9,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <iostream>
-#include <llvm/IR/Constants.h>
-#include <llvm/IR/DerivedTypes.h>
-
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Demangle/Demangle.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassInstrumentation.h"
 #include "llvm/IR/PassManager.h"
@@ -26,9 +26,15 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 namespace {
 
+//===----------------------------------------------------------------------===//
+/// This class implements an LLVM module analysis pass.
+/// The CallSiteFinderAnalysis retrieves all call sites at which direct calls
+/// to the "void foo()" function are found.
+///
 class CallSiteFinderAnalysis
     : public llvm::AnalysisInfoMixin<CallSiteFinderAnalysis> {
 public:
@@ -45,21 +51,21 @@ public:
   // Analyze the bitcode/IR in the given LLVM module.
   Result run(llvm::Module &M,
              [[maybe_unused]] llvm::ModuleAnalysisManager &MAM) {
-    // The function name that we wish to find.
-    const static llvm::StringRef TargetFunName = "_Z3foov";
+    // The demangled(!) function name that we wish to find.
+    const static llvm::StringRef TargetFunName = "foo()";
     Result TargetCallSites;
+    llvm::outs() << "running code analysis...\n";
     for (auto &F : M) {
       for (auto &BB : F) {
         for (auto &I : BB) {
           if (auto *CB = llvm::dyn_cast<llvm::CallBase>(&I)) {
-            if (!CB->isIndirectCall()) {
-              // Only find direct function calls.
-              if (CB->getCalledFunction() &&
-                  CB->getCalledFunction()->getName() == TargetFunName) {
-                llvm::outs()
-                    << "found a direct call to '" << TargetFunName << "'!\n";
-                TargetCallSites.insert(CB);
-              }
+            // Only find direct function calls.
+            if (!CB->isIndirectCall() && CB->getCalledFunction() &&
+                llvm::demangle(CB->getCalledFunction()->getName().str()) ==
+                    TargetFunName) {
+              llvm::outs() << "found a direct call to '" << TargetFunName
+                           << "'!\n";
+              TargetCallSites.insert(CB);
             }
           }
         }
@@ -69,6 +75,14 @@ public:
   }
 };
 
+//===----------------------------------------------------------------------===//
+/// This class implements an LLVM module transformation pass.
+/// The CallSiteReplacer queries the analysis pass in the above and replaces
+/// all direct calls to the "void foo()" that have been found by the
+/// CallSiteFinderAnalysis pass with calls to "void bar(int)". As a parameter to
+/// the "void bar(int)" function it provides a counter variables that counts the
+/// number of replacements that took place.
+///
 class CallSiteReplacer : public llvm::PassInfoMixin<CallSiteReplacer> {
 public:
   explicit CallSiteReplacer() = default;
@@ -77,35 +91,29 @@ public:
   // Transform the bitcode/IR in the given LLVM module.
   llvm::PreservedAnalyses run(llvm::Module &M,
                               llvm::ModuleAnalysisManager &MAM) {
-    // Request the results of our 'CallSiteFinderAnalysis' analysis pass.
+    // Request the results of our CallSiteFinderAnalysis analysis pass.
     // If the results are not yet available, because no other pass requested
     // them until now, they will be computed on-the-fly.
     auto TargetCallSites = MAM.getResult<CallSiteFinderAnalysis>(M);
     // The name of the function that we wish to call instead.
     const static llvm::StringRef ReplacementFunName = "_Z3bari";
     auto *ReplacementFun = M.getFunction(ReplacementFunName);
-    llvm::outs() << "the analysis pass found " << TargetCallSites.size()
-                 << " interesting target call sites...\n";
+    static unsigned ReplacementCounter = 1;
     llvm::outs() << "applying code transformation...\n";
     for (auto *TargetCallSite : TargetCallSites) {
-      // Construct the callee for replacement.
-      // auto *IntTy = llvm::IntegerType::get(M.getContext(), 32);
-      // auto *FunTy = llvm::FunctionType::get(
-          // llvm::Type::getVoidTy(M.getContext()), {IntTy}, false);
-      // llvm::FunctionCallee NewCallee(FunTy, ReplacementFun);
-      TargetCallSite->setCalledFunction(ReplacementFun);
-            auto *ConstInt = llvm::ConstantInt::get(
-          llvm::IntegerType::get(M.getContext(), 32), 42);
-      // TargetCallSite->set
-      TargetCallSite->setArgOperand(0, ConstInt);
-      TargetCallSite->getFunctionType()->print(llvm::outs());
-      llvm::outs() << '\n';
-      // Produce an integer constant to be used as an argument.
-
-      // TargetCallSite->replace;
-      llvm::outs() << "arg ops: " << TargetCallSite->getNumArgOperands() << '\n';
-      // TargetCallSite->setArgOperand(0, ConstInt);
+      // Create an LLVM constant int from our replacement counter.
+      auto *ConstInt = llvm::ConstantInt::get(
+          llvm::IntegerType::get(M.getContext(), 32 /* bits */),
+          ReplacementCounter);
+      // Construct the new call site.
+      auto *NewCallSite = llvm::CallInst::Create(
+          llvm::FunctionCallee(ReplacementFun), {ConstInt});
+      // Replace the target call site with the new call site.
+      llvm::ReplaceInstWithInst(TargetCallSite, NewCallSite);
+      ++ReplacementCounter;
     }
+    // We are lazy here and just claim that this transformation pass invalidates
+    // the results of all other analysis passes.
     return llvm::PreservedAnalyses::none();
   }
 };
@@ -147,8 +155,8 @@ int main(int argc, char **argv) {
   MPM.addPass(llvm::VerifierPass());
   // Run our transformation pass.
   MPM.run(*M, MAM);
-  llvm::outs() << "transformed program:\n";
+  llvm::outs() << "the transformed program:\n"
+               << "------------------------\n";
   llvm::outs() << *M;
-  llvm::outs() << '\n';
   return 0;
 }
