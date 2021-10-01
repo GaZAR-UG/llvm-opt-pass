@@ -1,5 +1,7 @@
-# The final binary
-transformation
+# Binaries
+*
+!/**/
+!*.*
 
 # LLVM IR
 *.ll

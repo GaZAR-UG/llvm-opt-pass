@@ -16,7 +16,7 @@ LLVM_LIBS := `llvm-config --system-libs --libs all`
 .PHONY: clean
 
 all: target
-	clang++ -std=c++17 -Wall -Wextra -O0 -g $(LLVM_FLAGS) transformation.cpp $(LLVM_LIBS) -o transformation
+	clang++ -std=c++17 -Wall -Wextra -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer $(LLVM_FLAGS) transformation.cpp $(LLVM_LIBS) -o transformation
 
 target:
 	clang++ -std=c++17 -Wall -Wextra -emit-llvm -S -fno-discard-value-names target-program.cpp
@@ -24,3 +24,4 @@ target:
 clean:
 	rm -f transformation
 	rm -f target-program.ll
+	rm -f target-program.bc

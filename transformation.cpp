@@ -42,15 +42,15 @@ public:
   ~CallSiteFinderAnalysis() = default;
   // Provide a unique key, i.e., memory address to be used by the LLVM's pass
   // infrastructure.
-  static inline llvm::AnalysisKey Key;
+  static inline llvm::AnalysisKey Key; // NOLINT
   friend llvm::AnalysisInfoMixin<CallSiteFinderAnalysis>;
 
   // Specify the result type of this analysis pass.
   using Result = llvm::SetVector<llvm::CallBase *>;
 
   // Analyze the bitcode/IR in the given LLVM module.
-  Result run(llvm::Module &M,
-             [[maybe_unused]] llvm::ModuleAnalysisManager &MAM) {
+  static Result run(llvm::Module &M,
+                    [[maybe_unused]] llvm::ModuleAnalysisManager &MAM) {
     // The demangled(!) function name that we wish to find.
     const static llvm::StringRef TargetFunName = "foo()";
     Result TargetCallSites;
@@ -89,8 +89,8 @@ public:
   ~CallSiteReplacer() = default;
 
   // Transform the bitcode/IR in the given LLVM module.
-  llvm::PreservedAnalyses run(llvm::Module &M,
-                              llvm::ModuleAnalysisManager &MAM) {
+  static llvm::PreservedAnalyses run(llvm::Module &M,
+                                     llvm::ModuleAnalysisManager &MAM) {
     // Request the results of our CallSiteFinderAnalysis analysis pass.
     // If the results are not yet available, because no other pass requested
     // them until now, they will be computed on-the-fly.
@@ -124,15 +124,16 @@ public:
 // that we can then use as a plugin for LLVM's optimizer 'opt'. But instead,
 // here we are going the full do-it-yourself route and set up everything
 // ourselves.
-int main(int argc, char **argv) {
-  if (argc != 2) {
+int main(int Argc, char **Argv) {
+  if (Argc != 2) {
     llvm::outs() << "usage: <prog> <IR file>\n";
     return 1;
   }
   // Parse an LLVM IR file.
   llvm::SMDiagnostic Diag;
   llvm::LLVMContext CTX;
-  std::unique_ptr<llvm::Module> M = llvm::parseIRFile(argv[1], Diag, CTX);
+  std::unique_ptr<llvm::Module> M =
+      llvm::parseIRFile(Argv[1], Diag, CTX); // NOLINT
   // Check if the module is valid.
   bool BrokenDbgInfo = false;
   if (llvm::verifyModule(*M, &llvm::errs(), &BrokenDbgInfo)) {
@@ -147,7 +148,7 @@ int main(int argc, char **argv) {
   llvm::ModulePassManager MPM;
   CallSiteFinderAnalysis CSF;
   // Register our analysis pass.
-  MAM.registerPass([&]() { return std::move(CSF); });
+  MAM.registerPass([&]() { return CSF; });
   PB.registerModuleAnalyses(MAM);
   // Add our transformation pass.
   MPM.addPass(CallSiteReplacer());
